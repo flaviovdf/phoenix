@@ -141,6 +141,85 @@ def bic(y_predicted, y_true, num_parameters):
 
     return n * np.log(((y_true - y_predicted) ** 2).mean()) + k * np.log(n)
 
+def _params_to_list_of_tuples(params, ignore=None):
+    
+    copy = []
+    for key in params:
+        parameter = params[key]
+        if ignore and parameter.name in ignore:
+            continue
+
+        copy.append((\
+                    parameter.name, parameter.value, parameter.vary, \
+                    parameter.min, parameter.max, parameter.expr))
+    
+    return copy
+
+def _fit_one(tseries, period, err_metric, curr_sp=0, curr_params=None):
+
+    init_params = []
+    #copy current parameters
+    if curr_params is not None:
+        ignore = ('num_models', 'start_points')
+        init_params.extend(_params_to_list_of_tuples(curr_params, ignore))
+    else:
+        #On the first run we search for a period
+        init_params.append(\
+                ('period', period, False, None, None, None))
+        init_params.append(\
+                ('amp', np.random.rand(), True, 0, 2, None))
+        init_params.append(\
+                ('phase', np.random.rand(), True, 0, period, None))
+    
+    #Add the new shock
+    init_params.append(\
+            ('i0_%d' % curr_sp, 1, False, None, None))
+    init_params.append(\
+            ('sp_%d' % curr_sp, curr_sp, False, None, None))
+    init_params.append(\
+            ('gamma_%d' % curr_sp, np.random.rand(), True, 0, 1))
+    init_params.append(\
+            ('beta_%d' % curr_sp, np.random.rand(), True, 0, 1))
+    init_params.append(\
+            ('r_%d' % curr_sp, np.random.rand(), True, 0, None))
+
+    #Add the num models and start points params
+    if curr_params and 'start_points' in curr_params:
+        start_points = curr_params['start_points'].value
+    else:
+        start_points = []
+
+    start_points.append(curr_sp)
+    num_models = len(start_points)
+    init_params.append(('start_points', start_points, False, None, None, None))
+    init_params.append(('num_models', num_models, False, None, None, None))
+
+    #Grid search for s0
+    best_err = np.inf
+    best_params = None
+    for s_0 in np.logspace(1, 8, 15):
+        params = lmfit.Parameters()
+        params.add_many(*init_params)
+        params.add('s0_%d' % curr_sp, value=s_0, vary=False)
+        
+        try:
+            lmfit.minimize(residual, params, \
+                    args=(tseries, err_metric))
+            
+            err = (residual(params, tseries, err_metric) ** 2).sum()
+            if err < best_err:
+                best_err = err
+                best_params = params
+
+        except (LinAlgError, FloatingPointError, ZeroDivisionError):
+            continue
+    
+    #ugly ugly hack. stick with last guess if none worked
+    if best_params is None:
+        best_params = params
+    
+    return best_params
+
 class FixedParamsPhoenixR(object):
     '''
     PhoenixR model with parameters
@@ -303,78 +382,6 @@ class FixedStartPhoenixR(object):
     def __call__(self, num_ticks):
         return phoenix_r_with_period(self.parameters, num_ticks)
     
-    def _fit_one(self, tseries, curr_sp=0, curr_params=None):
-        
-        init_params = []
-        #copy current parameters
-        if curr_params is not None:
-            for key in curr_params:
-                parameter = curr_params[key]
-                if parameter.name in ('num_models', 'start_points'):
-                    continue
-
-                init_params.append((\
-                        parameter.name, parameter.value, parameter.vary, \
-                        parameter.min, parameter.max, parameter.expr))
-
-        else:
-            #On the first run we search for a period
-            init_params.append(\
-                    ('period', self.period, False, None, None, None))
-            init_params.append(\
-                    ('amp', np.random.rand(), True, 0, None, None))
-            init_params.append(\
-                    ('phase', np.random.rand(), True, 0, self.period, None))
-        
-        #Add the new shock
-        init_params.append(\
-                ('i0_%d' % curr_sp, 1, False, None, None))
-        init_params.append(\
-                ('sp_%d' % curr_sp, curr_sp, False, None, None))
-        init_params.append(\
-                ('gamma_%d' % curr_sp, np.random.rand(), True, 0, 1))
-        init_params.append(\
-                ('beta_%d' % curr_sp, np.random.rand(), True, 0, 1))
-        init_params.append(\
-                ('r_%d' % curr_sp, np.random.rand(), True, 0, None))
-
-        #Add the num models and start points params
-        if curr_params and 'start_points' in curr_params:
-            start_points = curr_params['start_points'].value
-        else:
-            start_points = []
-
-        start_points.append(curr_sp)
-        num_models = len(start_points)
-        init_params.append(('start_points', start_points, False, None, None, None))
-        init_params.append(('num_models', num_models, False, None, None, None))
-
-        #Grid search for s0
-        best_err = np.inf
-        best_params = None
-        for s_0 in np.logspace(1, 8, 15):
-            params = lmfit.Parameters()
-            params.add_many(*init_params)
-            params.add('s0_%d' % curr_sp, value=s_0, vary=False)
-            
-            try:
-                lmfit.minimize(residual, params, \
-                        args=(tseries, self.err_metric))
-                
-                err = (residual(params, tseries, self.err_metric) ** 2).sum()
-                if err < best_err:
-                    best_err = err
-                    best_params = params
-
-            except (LinAlgError, FloatingPointError, ZeroDivisionError):
-                continue
-        
-        #ugly ugly hack. stick with last guess if none worked
-        if best_params is None:
-            best_params = params
-        
-        return best_params
-
     def fit(self, tseries):
         
         tseries = np.asanyarray(tseries)
@@ -383,7 +390,7 @@ class FixedStartPhoenixR(object):
         old_state = np.seterr(all='raise')
         params = None
         for sp in start_points:
-            params = self._fit_one(tseries, sp, params)
+            params = _fit_one(tseries, self.period, self.err_metric, sp, params)
         
         num_models = len(start_points)
         self.num_params = 5 * num_models + 2
@@ -431,8 +438,10 @@ class WavePhoenixR(object):
         self.threshold = threshold
         self.err_metric = err_metric
         
-        #Let the base model instatiate the score func
-        self.score_func = score_func
+        if score_func == 'bic':
+            self.score_func = bic
+        else:
+            self.score_func = msq
         
         self.parameters = None
         self.num_params = None
@@ -457,38 +466,38 @@ class WavePhoenixR(object):
 
         #Consider unique start_points only.
         #TODO: maybe we can use multiple infections starting at the same point?
-        candidate_start_points = set()
-        candidate_start_points.add(0) 
+        candidate_start_points = []
+        candidate_start_points.append(0) 
         
         for x in peaks:
-            candidate_start_points.add(max(x[2] - x[1], 0))
-        
-        candidate_start_points = np.asarray([x for x in candidate_start_points], 
-                dtype='i')
+            candidate_sp = max(x[2] - x[1], 0)
+            if candidate_sp not in candidate_start_points:
+                candidate_start_points.append(candidate_sp)
         
         curr_score = np.finfo('d').max
         best_score = np.finfo('d').max
-
-        best_model = None
+        best_params = None
         
-        possible_models = candidate_start_points.shape[0]
-        for i in xrange(1, possible_models + 1):
-            start_points = candidate_start_points[:i]
-            base_model = FixedStartPhoenixR(start_points, period, err_metric, \
-                    score_func)
-            base_model.fit(tseries)
+        params = None
+        for i in xrange(len(candidate_start_points)):
+            sp = candidate_start_points[i]
+            params = _fit_one(tseries, period, err_metric, sp, params)
             
-            curr_score = base_model.score
+            model = phoenix_r_with_period(params, tseries.shape[0])
+            num_params = 5 * (i + 1) + 2
+            curr_score = self.score_func(model, tseries, num_params)
+
             if (curr_score <= best_score):
-                best_model = base_model
+                assert params is not best_params
+                best_params = params
                 best_score = curr_score
             else:
                 increased_score = (curr_score - best_score) / best_score
                 if increased_score > threshold:
                     break
         
-        self.num_params = best_model.num_params
-        self.parameters = best_model.parameters
-        self.score = best_model.score
- 
+        self.parameters = best_params
+        self.num_params = 5 * self.parameters['num_models'].value + 2
+        self.score = best_score
+
         return self
