@@ -96,6 +96,7 @@ def test_fixed_fit():
     
     results = model(200)
     
+    assert_array_equal([0, 50], model.parameters['start_points'].value)
     assert_equal(exp_tseries.shape, results.shape)
 
 def test_init_params_model():

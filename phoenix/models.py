@@ -15,6 +15,7 @@ import multiprocessing as mp
 import numpy as np
 
 RESIDUALS = set(['ssq', 'log', 'chisq'])
+SCORES = set(['bic', 'msq'])
 
 def period_fun(period, amp, phase, t):
     '''
@@ -129,6 +130,10 @@ def residual(params, tseries, err_metric='log'):
     else:
         return tseries - est
 
+def msq(y_predicted, y_true, num_parameters):
+
+    return ((y_true - y_predicted) ** 2).mean()
+
 def bic(y_predicted, y_true, num_parameters):
 
     n = y_true.shape[0]
@@ -144,11 +149,25 @@ class FixedParamsPhoenixR(object):
     ----------
     parameters : dict like
         The parameters for the model
+
+    score_func : string in {'bic', 'msq'}
+        Select the score to store. BIC or SSQ. Our BIC score is based
+        on the assumptions that errors are normally distributed. This is
+        considered a safe choice.
     '''
-    def __init__(self, parameters):
+    def __init__(self, parameters, score_func='bic'):
+        
+        if score not in SCORES:
+            raise ValueError('Most choose residual from ' + SCORES)
+
         self.parameters = parameters
+        if score_func == 'bic':
+            self.score_func = bic
+        else:
+            self.score_func = msq
+
         self.num_params = None
-        self.bic = None
+        self.score = None
 
     def __call__(self, num_ticks):
         return phoenix_r_with_period(self.parameters, num_ticks)
@@ -163,7 +182,7 @@ class FixedParamsPhoenixR(object):
             num_models = self.parameters['num_models']
 
         self.num_params = 5 * num_models + 2
-        self.bic = bic(phoenix_r_with_period(self.parameters, \
+        self.score = self.score_func(phoenix_r_with_period(self.parameters, \
                 tseries.shape[0]), tseries, self.num_params)
         return self
 
@@ -175,12 +194,28 @@ class InitParametersPhoenixR(object):
     ----------
     parameters : dict like or lmfit.Parameters
         Initial parameters for the phoenix R model
+
+    err_metric : string in ('log', 'ssq', 'chisq')
+        Error metric to minimize on the residual. See the function
+        residual for more details.
+
+
+    score_func : string in {'bic', 'msq'}
+        Select the score to store. BIC or SSQ. Our BIC score is based
+        on the assumptions that errors are normally distributed. This is
+        considered a safe choice.
     '''
-    def __init__(self, parameters, err_metric='log'):
+    def __init__(self, parameters, err_metric='log', score_func='bic'):
         self.parameters = self._tolmfit(parameters)
         self.err_metric = err_metric
+        
+        if score_func == 'bic':
+            self.score_func = bic
+        else:
+            self.score_func = msq
+       
         self.num_params = None
-        self.bic = None
+        self.score = None
 
     def _tolmfit(self, parameters):
         if isinstance(parameters, lmfit.Parameters):
@@ -220,20 +255,22 @@ class InitParametersPhoenixR(object):
 
         num_models = self.parameters['num_models']
         self.num_params = 5 * num_models + 2
-        self.bic = bic(model, tseries, self.num_params)
+        self.score = self.score_func(model, tseries, self.num_params)
 
         np.seterr(**old_state)
         return self
 
 class FixedStartPhoenixR(object):
     '''
-    PhoenixR model with fixed start points
+    PhoenixR model with fixed start points. The model will fit one start
+    point at a time, adding new ones in order. A final fit is performed 
+    to using the results of the previous ones as start points.
     
     Parameters
     ----------
     start_points : array like
         List of start points for each infection. The algorithm will fit each
-        start point
+        start point in the order it appears on this list.
 
     period : integer
         Period to consider. If time windows are daily, 7 means weekly period
@@ -241,80 +278,123 @@ class FixedStartPhoenixR(object):
     err_metric : string in ('log', 'ssq', 'chisq')
         Error metric to minimize on the residual. See the function
         residual for more details.
+
+    score_func : string in {'bic', 'msq'}
+        Select the score to store. BIC or SSQ. Our BIC score is based
+        on the assumptions that errors are normally distributed. This is
+        considered a safe choice.
     '''
 
-    def __init__(self, start_points, period=7, err_metric='log'):
+    def __init__(self, start_points, period=7, err_metric='log', \
+            score_func='bic'):
         self.start_points = np.asanyarray(start_points, dtype='i')
         self.period = period
         self.err_metric = err_metric
+        
+        if score_func == 'bic':
+            self.score_func = bic
+        else:
+            self.score_func = msq
+        
         self.parameters = None
         self.num_params = None
-        self.bic = None
+        self.score = None
     
     def __call__(self, num_ticks):
         return phoenix_r_with_period(self.parameters, num_ticks)
+    
+    def _fit_one(self, tseries, curr_sp=0, curr_params=None):
+        
+        init_params = []
+        #copy current parameters
+        if curr_params is not None:
+            for key in curr_params:
+                parameter = curr_params[key]
+                if parameter.name in ('num_models', 'start_points'):
+                    continue
 
-    def fit(self, tseries):
-        
-        old_state = np.seterr(all='raise')
-        
-        tseries = np.asanyarray(tseries)
-        
-        start_points = np.asanyarray(self.start_points, dtype='i')
-        err_metric = self.err_metric
-        period = self.period
-        num_models = start_points.shape[0]
+                init_params.append((\
+                        parameter.name, parameter.value, parameter.vary, \
+                        parameter.min, parameter.max, parameter.expr))
 
+        else:
+            #On the first run we search for a period
+            init_params.append(\
+                    ('period', self.period, False, None, None, None))
+            init_params.append(\
+                    ('amp', np.random.rand(), True, 0, None, None))
+            init_params.append(\
+                    ('phase', np.random.rand(), True, 0, self.period, None))
+        
+        #Add the new shock
+        init_params.append(\
+                ('i0_%d' % curr_sp, 1, False, None, None))
+        init_params.append(\
+                ('sp_%d' % curr_sp, curr_sp, False, None, None))
+        init_params.append(\
+                ('gamma_%d' % curr_sp, np.random.rand(), True, 0, 1))
+        init_params.append(\
+                ('beta_%d' % curr_sp, np.random.rand(), True, 0, 1))
+        init_params.append(\
+                ('r_%d' % curr_sp, np.random.rand(), True, 0, None))
+
+        #Add the num models and start points params
+        if curr_params and 'start_points' in curr_params:
+            start_points = curr_params['start_points'].value
+        else:
+            start_points = []
+
+        start_points.append(curr_sp)
+        num_models = len(start_points)
+        init_params.append(('start_points', start_points, False, None, None, None))
+        init_params.append(('num_models', num_models, False, None, None, None))
+
+        #Grid search for s0
         best_err = np.inf
         best_params = None
-        
         for s_0 in np.logspace(1, 8, 15):
             params = lmfit.Parameters()
-            for m in xrange(num_models):
-                params.add('s0_%d' % start_points[m], 
-                        value=s_0, vary=False)
-                params.add('i0_%d' % start_points[m], value=1, vary=False)
-                params.add('sp_%d' % start_points[m], value=start_points[m], 
-                        vary=False)
-                
-                params.add('gamma_%d' % start_points[m],
-                        value=np.random.rand(), min=0, max=1)
-                params.add('beta_%d' % start_points[m],
-                        value=np.random.rand(), min=0, max=1)
-                params.add('r_%d' % start_points[m],
-                        value=np.random.rand(), min=0)
-            
-            params.add('num_models', value=num_models, vary=False)
-            params.add('start_points', value=start_points, vary=False)
-
-            params.add('period', value=period, vary=False)
-            params.add('amp', value=np.random.rand(), min=0)
-            params.add('phase', value=np.random.rand(), min=0, max=period)
+            params.add_many(*init_params)
+            params.add('s0_%d' % curr_sp, value=s_0, vary=False)
             
             try:
-                lmfit.minimize(residual, params, args=(tseries, err_metric))
+                lmfit.minimize(residual, params, \
+                        args=(tseries, self.err_metric))
                 
-                err = (residual(params, tseries, err_metric) ** 2).sum()
+                err = (residual(params, tseries, self.err_metric) ** 2).sum()
                 if err < best_err:
                     best_err = err
                     best_params = params
 
             except (LinAlgError, FloatingPointError, ZeroDivisionError):
                 continue
-
+        
         #ugly ugly hack. stick with last guess if none worked
         if best_params is None:
             best_params = params
         
+        return best_params
+
+    def fit(self, tseries):
+        
+        tseries = np.asanyarray(tseries)
+        start_points = [sp for sp in self.start_points]
+
+        old_state = np.seterr(all='raise')
+        params = None
+        for sp in start_points:
+            params = self._fit_one(tseries, sp, params)
+        
+        num_models = len(start_points)
         self.num_params = 5 * num_models + 2
-        self.parameters = best_params
+        self.parameters = params
         
         try:
             model = phoenix_r_with_period(self.parameters, tseries.shape[0])
         except (LinAlgError, FloatingPointError, ZeroDivisionError):
             model = tseries.mean()
 
-        self.bic = bic(model, tseries, self.num_params)
+        self.score = self.score_func(model, tseries, self.num_params)
         np.seterr(**old_state)
         return self
 
@@ -337,17 +417,26 @@ class WavePhoenixR(object):
     err_metric : string in ('log', 'ssq', 'chisq')
         Error metric to minimize on the residual. See the function
         residual for more details.
+    
+    score_func : string in {'bic', 'msq'}
+        Select the score to store. BIC or SSQ. Our BIC score is based
+        on the assumptions that errors are normally distributed. This is
+        considered a safe choice. 
     '''
 
     def __init__(self, period=7, wave_widths=[1, 2, 4, 8, 16, 32, 64, 128, 256], 
-            threshold=.05, err_metric='log'):
+            threshold=.05, err_metric='log', score_func='bic'):
         self.period = period
         self.wave_widths = wave_widths
         self.threshold = threshold
         self.err_metric = err_metric
+        
+        #Let the base model instatiate the score func
+        self.score_func = score_func
+        
         self.parameters = None
         self.num_params = None
-        self.bic = None
+        self.score = None
 
     def __call__(self, num_ticks):
         return phoenix_r_with_period(self.parameters, num_ticks)
@@ -361,6 +450,7 @@ class WavePhoenixR(object):
         period = self.period
         threshold = self.threshold
         err_metric = self.err_metric
+        score_func = self.score_func
 
         #Find peaks and add them all to a set 
         peaks = find_peaks(tseries, wave_widths)
@@ -376,28 +466,29 @@ class WavePhoenixR(object):
         candidate_start_points = np.asarray([x for x in candidate_start_points], 
                 dtype='i')
         
-        curr_bic = np.finfo('d').max
-        best_bic = np.finfo('d').max
+        curr_score = np.finfo('d').max
+        best_score = np.finfo('d').max
 
         best_model = None
         
         possible_models = candidate_start_points.shape[0]
         for i in xrange(1, possible_models + 1):
             start_points = candidate_start_points[:i]
-            base_model = FixedStartPhoenixR(start_points, period, err_metric)
+            base_model = FixedStartPhoenixR(start_points, period, err_metric, \
+                    score_func)
             base_model.fit(tseries)
             
-            curr_bic = base_model.bic
-            if (curr_bic <= best_bic):
+            curr_score = base_model.score
+            if (curr_score <= best_score):
                 best_model = base_model
-                best_bic = curr_bic
+                best_score = curr_score
             else:
-                increased_bic = (curr_bic - best_bic) / best_bic
-                if increased_bic > threshold:
+                increased_score = (curr_score - best_score) / best_score
+                if increased_score > threshold:
                     break
         
         self.num_params = best_model.num_params
         self.parameters = best_model.parameters
-        self.bic = best_model.bic
+        self.score = best_model.score
  
         return self
