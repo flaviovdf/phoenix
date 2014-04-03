@@ -44,3 +44,7 @@ def predict_one(x, C, k):
 
 
     init_params = average_params(models_dict, closest)
+
+
+
+def predict_tseries_only(tseries, train_time=.10, steps_ahead=30):

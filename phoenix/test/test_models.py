@@ -91,7 +91,8 @@ def test_fixed_fit():
     exp_tseries = result_1
     exp_tseries[50:] += result_2
    
-    model = models.FixedStartPhoenixR([0, 50], period=1)
+    pv1, pv2 = sorted(exp_tseries[::-1])[:2]
+    model = models.FixedStartPhoenixR([0, 50], [pv1, pv2], period=1)
     model.fit(exp_tseries)
     
     results = model(200)
@@ -108,7 +109,8 @@ def test_init_params_model():
     exp_tseries = result_1
     exp_tseries[50:] += result_2
    
-    model = models.FixedStartPhoenixR([0, 50], period=1)
+    pv1, pv2 = sorted(exp_tseries[::-1])[:2]
+    model = models.FixedStartPhoenixR([0, 50], [pv1, pv2], period=1)
     model.fit(exp_tseries)
     
     model2 = models.InitParametersPhoenixR(model.parameters)

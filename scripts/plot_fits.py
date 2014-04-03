@@ -36,10 +36,11 @@ def main(tseries_fpath, result_fpath, window_size='1d'):
                 errors[obj_id] = err
                 obj_id = None
     
-    from random import shuffle
+    #from random import shuffle
     keys = [x for x in parameters]
-    shuffle(keys)
+    #shuffle(keys)
     for key in keys:
+        print(key)
         h_frame = store[key]
         d_frame = h_frame.resample(window_size, how='sum')
         

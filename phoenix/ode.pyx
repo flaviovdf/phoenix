@@ -1,6 +1,6 @@
 #-*- coding: utf8
-#cython: boundscheck=False
-#cython: wraparound=False
+# cython:boundscheck=False
+# cython:wraparound=False
 '''
 Cython module containing the Euler method for simulating the ODEs of the
 Shock and Phoenix-R model
