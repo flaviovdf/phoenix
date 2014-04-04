@@ -65,11 +65,15 @@ def phoenix_r_with_period(parameters, num_ticks):
         amp = parameters['amp'].value
         phase = parameters['phase'].value
         period = parameters['period'].value
+        #err_cte = parameters['err_cte'].value
     else:
         amp = parameters['amp']
         phase = parameters['phase']
         period = parameters['period']
-        
+        #err_cte = parameters['err_cte']
+    
+    #result += err_cte
+    result[result < 0.1] = 0
     result *= period_fun(period, amp, phase, np.arange(num_ticks))
 
     return result
@@ -168,28 +172,27 @@ def _fit_one(tseries, period, err_metric, curr_sp, curr_pv, curr_params):
         init_params.append(\
                 ('period', period, False))
         init_params.append(\
-                ('amp', 0.01, True, 0, 2))
+                ('amp', np.random.rand(), True, 0, 2))
         init_params.append(\
-                ('phase', 0.01, True, 0.01, period))
+                ('phase', 0, np.random.rand(), 0.01, period))
+    #    init_params.append(\
+    #            ('err_cte', 0.01, True, 0, 100))
     
     #Add the new shock
-    if curr_sp != 0:
-    #    init_params.append(\
-    #            ('s0_%d' % curr_sp, curr_pv, True, None, None))
-    #else:
-        init_params.append(\
-                ('s0_%d' % curr_sp, curr_pv, False))
+    #if curr_sp != 0:
+    init_params.append(\
+                ('s0_%d' % curr_sp, curr_pv, True))
 
     init_params.append(\
             ('i0_%d' % curr_sp, 1, False))
     init_params.append(\
             ('sp_%d' % curr_sp, curr_sp, False))
     init_params.append(\
-            ('beta_%d' % curr_sp, 0.01, True, 0, 1))
+            ('beta_%d' % curr_sp, np.random.rand(), True, 0, 1))
     init_params.append(\
-            ('r_%d' % curr_sp, 1, True, 0))
+            ('r_%d' % curr_sp, np.random.rand(), True, 0))
     init_params.append(\
-            ('gamma_%d' % curr_sp, 0.01, True, 0, 1))
+            ('gamma_%d' % curr_sp, np.random.rand(), True, 0, 1))
 
     #Add the num models and start points params
     if curr_params and 'start_points' in curr_params:
@@ -209,17 +212,17 @@ def _fit_one(tseries, period, err_metric, curr_sp, curr_pv, curr_params):
     for s0_0 in np.logspace(2, 6, 5):
         params = lmfit.Parameters()
         params.add_many(*init_params)
-        params.add('s0_0', value=s0_0, vary=False)
+        params.add('s0_0', value=s0_0, vary=True)
         
         try:
             lmfit.minimize(residual, params, \
-                    args=(tseries, err_metric))
+                    args=(tseries, err_metric), ftol=.0001, xtol=.0001)
             
             err = (residual(params, tseries, err_metric) ** 2).sum()
             if err < best_err:
                 best_err = err
                 best_params = params
-
+    
         except (AssertionError, LinAlgError, FloatingPointError, ZeroDivisionError):
             continue
     
@@ -229,7 +232,7 @@ def _fit_one(tseries, period, err_metric, curr_sp, curr_pv, curr_params):
 
     #params = lmfit.Parameters()
     #params.add_many(*init_params)
-    #lmfit.minimize(residual, params, args=(tseries, err_metric))
+    #lmfit.minimize(residual, params, args=(tseries, err_metric), ftol=.0001, xtol=.0001)
     return best_params
 
 class FixedParamsPhoenixR(object):
