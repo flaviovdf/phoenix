@@ -14,8 +14,8 @@ def get_above(time_series):
     dups = time_series[:, 1]
     audi = time_series[:, 2]
     
-    dups = dups[pops >= 500]
-    audi = audi[pops >= 500]
+    dups = dups[pops >= 20]
+    audi = audi[pops >= 20]
 
     return dups / audi
 
@@ -57,7 +57,7 @@ def main(input_fpath, out_folder):
         w_time_series = w_frame.values
         m_time_series = m_frame.values
 
-        h_results.extend(get_above(h_time_series))    
+        h_results.extend(get_above(h_time_series))
         d_results.extend(get_above(d_time_series))
         w_results.extend(get_above(w_time_series))
         m_results.extend(get_above(m_time_series))

@@ -1,21 +1,29 @@
 #-*- coding: utf8
 '''
 This module contains the mixture of odes used for each
-infectivity model.
+infectivity model. The classes here defined are used for
+fitting the Phoenix-R model.
 '''
 from __future__ import division, print_function
 
 from numpy.linalg import LinAlgError
 
 from phoenix import ode
+
 from phoenix.peak_finder import find_peaks
+
+from phoenix.score_funcs import bic
+from phoenix.score_funcs import msq
+from phoenix.score_funcs import mdl 
 
 import lmfit
 import multiprocessing as mp
 import numpy as np
 
-RESIDUALS = set(['ssq', 'log', 'chisq'])
-SCORES = set(['bic', 'msq'])
+RESIDUALS = set(['lin', 'log', 'mean'])
+SCORES = {'bic':bic,
+          'msq':msq,
+          'mdl':mdl}
 
 def period_fun(period, amp, phase, t):
     '''
@@ -59,39 +67,33 @@ def phoenix_r_with_period(parameters, num_ticks):
     '''
 
     result = ode.phoenix_r(parameters, num_ticks)
-    #result[result < 1] = 0
-
+        
     if isinstance(parameters, lmfit.Parameters):
         amp = parameters['amp'].value
         phase = parameters['phase'].value
         period = parameters['period'].value
-        #err_cte = parameters['err_cte'].value
     else:
         amp = parameters['amp']
         phase = parameters['phase']
         period = parameters['period']
-        #err_cte = parameters['err_cte']
     
-    #result += err_cte
-    result[result < 0.1] = 0
     result *= period_fun(period, amp, phase, np.arange(num_ticks))
 
     return result
 
-def residual(params, tseries, err_metric='log'):
+def residual(params, tseries, residual_metric):
     '''
     Computes the residual of the model. Different strategies can me used
     for this computaion such as:
 
-        1. ssq (Sum Squared Errors) - Returns the sum of squared errors of the 
+        1. lin (Sum squared errors) - Returns the sum of squared errors of the 
             model
-        2. log (Sum Squared Errors on log) - The same as ssq but transforms the
-            data and model to log scales. Useful for when the data has a high
+        2. log (Sum squared errors on log) - The same as msq but transforms 
+            the data and model to log scales. Useful for when the data has a high
             variability in values. This is close to minimizing the squared of
             the relative error
-        3. chisq (Chi Squared) - Minimizes Pearson's Chi Square statistic. This
-            is: $(tseries[i] - model[i])^2 / data[i]$. Also mimicks the relative
-            error.
+        3. mean (mean squared errors) - Returns the mean squared errors of 
+            the model
     
     Parameters
     ----------
@@ -101,50 +103,34 @@ def residual(params, tseries, err_metric='log'):
     tseries : array like 
         Time series which the model tries to capture
     
-    err_metric : string in ('ssq', 'log', 'chisq')
-        Error metric to use, defaults to ssq
+    residual_metric : string in ('lin', 'log', 'mean')
+        Error metric to use, defaults to mean
 
     Returns
     -------
     This method returns an array with:
-        1. $tseries[i] - model[i]$ in the case of 'ssq'.
-        2. $log(tseries[i]) - log(model[i]$ in the case of 'log'. 
-            Zeros are masked out.
-        3. $(tseries[i] - model[i])^2 / data[i]$ in the case 
-            of 'chisq'. Zeros are masked out.
-
-    To compute the actual error (ssq, log or chisq) one can do simply
-    sum the squares of the return value. We return individual diferences
-    since it is required by scipy's optimization algorithms.
+        1. sum($tseries[i] - model[i]$) in the case of 'lin'.
+        2. sum($log(tseries[i]) - log(model[i]$) in the case of 'log'.
+        3. mean($tseries[i] - model[i]$) in the case of 'mean'.
     '''
     
-    if err_metric not in RESIDUALS:
-        raise ValueError('Most choose residual from ' + RESIDUALS)
-    
+    if residual_metric not in RESIDUALS:
+        raise ValueError('Most choose residual from ' + ' '.join(RESIDUALS))
+
     est = phoenix_r_with_period(params, tseries.shape[0])
-    
-    if err_metric in ('log', 'chisq'):
+
+    if residual_metric == 'log':
         msk = (est > 0) & (tseries > 0)
         if not msk.any():
             return (tseries - tseries.mean())
-        
-        if err_metric == 'log':
-            return np.log(tseries[msk]) - np.log(est[msk])
-        else:
-            return tseries[msk] - est[msk] / np.sqrt(tseries[msk])
+        return np.log(tseries[msk]) - np.log(est[msk]) 
     else:
-        return tseries - est
-
-def msq(y_predicted, y_true, num_parameters):
-
-    return ((y_true - y_predicted) ** 2).mean()
-
-def bic(y_predicted, y_true, num_parameters):
-
-    n = y_true.shape[0]
-    k = num_parameters
-
-    return n * np.log(((y_true - y_predicted) ** 2).mean()) + k * np.log(n)
+        n = tseries.shape[0]
+        if residual_metric == 'mean':
+            div = np.sqrt(n)
+        else:
+            div = 1
+        return (tseries - est) / div
 
 def _params_to_list_of_tuples(params, ignore=None):
     
@@ -160,8 +146,8 @@ def _params_to_list_of_tuples(params, ignore=None):
     
     return copy
 
-def _fit_one(tseries, period, err_metric, curr_sp, curr_pv, curr_params):
-
+def _fit_one(tseries, period, residual_metric, curr_sp, curr_pv, curr_params):
+    
     init_params = []
     #copy current parameters
     if curr_params is not None:
@@ -172,15 +158,13 @@ def _fit_one(tseries, period, err_metric, curr_sp, curr_pv, curr_params):
         init_params.append(\
                 ('period', period, False))
         init_params.append(\
-                ('amp', np.random.rand(), True, 0, 2))
+                ('amp', 0, True, 0, 1))
         init_params.append(\
-                ('phase', 0, np.random.rand(), 0.01, period))
-    #    init_params.append(\
-    #            ('err_cte', 0.01, True, 0, 100))
+                ('phase', 0, 0, 0, period))
     
     #Add the new shock
-    #if curr_sp != 0:
-    init_params.append(\
+    if curr_sp != 0:
+        init_params.append(\
                 ('s0_%d' % curr_sp, curr_pv, True))
 
     init_params.append(\
@@ -209,30 +193,27 @@ def _fit_one(tseries, period, err_metric, curr_sp, curr_pv, curr_params):
     #Grid search for s0_0
     best_err = np.inf
     best_params = None
-    for s0_0 in np.logspace(2, 6, 5):
+    for s0_0 in np.logspace(2, 6, 21):
         params = lmfit.Parameters()
         params.add_many(*init_params)
         params.add('s0_0', value=s0_0, vary=True)
         
         try:
             lmfit.minimize(residual, params, \
-                    args=(tseries, err_metric), ftol=.0001, xtol=.0001)
-            
-            err = (residual(params, tseries, err_metric) ** 2).sum()
+                    args=(tseries, residual_metric), ftol=.0001, xtol=.0001)
+            err = (residual(params, tseries, residual_metric) ** 2).sum()
             if err < best_err:
                 best_err = err
                 best_params = params
     
-        except (AssertionError, LinAlgError, FloatingPointError, ZeroDivisionError):
+        except (AssertionError, LinAlgError, FloatingPointError, \
+                ZeroDivisionError):
             continue
     
     #ugly ugly hack. stick with last guess if none worked
     if best_params is None:
         best_params = params
 
-    #params = lmfit.Parameters()
-    #params.add_many(*init_params)
-    #lmfit.minimize(residual, params, args=(tseries, err_metric), ftol=.0001, xtol=.0001)
     return best_params
 
 class FixedParamsPhoenixR(object):
@@ -251,14 +232,8 @@ class FixedParamsPhoenixR(object):
     '''
     def __init__(self, parameters, score_func='bic'):
         
-        if score_func not in SCORES:
-            raise ValueError('Most choose residual from ' + SCORES)
-
         self.parameters = parameters
-        if score_func == 'bic':
-            self.score_func = bic
-        else:
-            self.score_func = msq
+        self.score_func = SCORES[score_func]
 
         self.num_params = None
         self.score = None
@@ -277,7 +252,7 @@ class FixedParamsPhoenixR(object):
 
         self.num_params = 5 * num_models + 2
         self.score = self.score_func(phoenix_r_with_period(self.parameters, \
-                tseries.shape[0]), tseries, self.num_params)
+                tseries.shape[0]), tseries, self.num_params, self.parameters)
         return self
 
 class InitParametersPhoenixR(object):
@@ -289,27 +264,20 @@ class InitParametersPhoenixR(object):
     parameters : dict like or lmfit.Parameters
         Initial parameters for the phoenix R model
 
-    err_metric : string in ('log', 'ssq', 'chisq')
+    residual_metric : string in ('lin', 'log', 'mean')
         Error metric to minimize on the residual. See the function
-        residual for more details.
+        `residual` for more details.
 
 
     score_func : string in {'bic', 'msq'}
-        Select the score to store. BIC or SSQ. Our BIC score is based
+        Select the score to store. BIC or MSQ. Our BIC score is based
         on the assumptions that errors are normally distributed. This is
         considered a safe choice.
     '''
-    def __init__(self, parameters, err_metric='log', score_func='bic'):
+    def __init__(self, parameters, residual_metric='mean', score_func='bic'):
         self.parameters = self._tolmfit(parameters)
-        self.err_metric = err_metric
-        
-        if score_func not in SCORES:
-            raise ValueError('Most choose residual from ' + SCORES)
-        
-        if score_func == 'bic':
-            self.score_func = bic
-        else:
-            self.score_func = msq
+        self.residual_metric = residual_metric
+        self.score_func = SCORES[score_func]
        
         self.num_params = None
         self.score = None
@@ -347,12 +315,13 @@ class InitParametersPhoenixR(object):
         
         old_state = np.seterr(all='raise')
         lmfit.minimize(residual, self.parameters, \
-                    args=(tseries, self.err_metric))
+                    args=(tseries, self.residual_metric))
         model = phoenix_r_with_period(self.parameters, tseries.shape[0])
 
         num_models = self.parameters['num_models']
         self.num_params = 5 * num_models + 2
-        self.score = self.score_func(model, tseries, self.num_params)
+        self.score = self.score_func(model, tseries, self.num_params, \
+                self.parameters)
 
         np.seterr(**old_state)
         return self
@@ -375,34 +344,27 @@ class FixedStartPhoenixR(object):
     period : integer
         Period to consider. If time windows are daily, 7 means weekly period
 
-    err_metric : string in ('log', 'ssq', 'chisq')
+    residual_metric : string in ('lin', 'log', 'mean')
         Error metric to minimize on the residual. See the function
         residual for more details.
 
-    score_func : string in {'bic', 'msq'}
+    score_func : string in ('bic', 'msq')
         Select the score to store. BIC or SSQ. Our BIC score is based
         on the assumptions that errors are normally distributed. This is
         considered a safe choice.
     '''
 
-    def __init__(self, start_points, peak_volumes, period=7, err_metric='log', \
-            score_func='bic'):
+    def __init__(self, start_points, peak_volumes, period=7, \
+            residual_metric='mean', score_func='bic'):
         
-        if score_func not in SCORES:
-            raise ValueError('Most choose residual from ' + SCORES)
-         
         self.start_points = np.asanyarray(start_points, dtype='i')
         self.peak_volumes = np.asanyarray(peak_volumes, dtype='f')
 
         assert self.start_points.shape[0] == self.peak_volumes.shape[0]
 
         self.period = period
-        self.err_metric = err_metric
-        
-        if score_func == 'bic':
-            self.score_func = bic
-        else:
-            self.score_func = msq
+        self.residual_metric = residual_metric
+        self.score_func = SCORES[score_func] 
         
         self.parameters = None
         self.num_params = None
@@ -423,7 +385,7 @@ class FixedStartPhoenixR(object):
             pv = self.peak_volumes[i]
             
             params = \
-                _fit_one(tseries, self.period, self.err_metric, sp, pv, params)
+                _fit_one(tseries, self.period, self.residual_metric, sp, pv, params)
         
         num_models = len(start_points)
         self.num_params = 5 * num_models + 2
@@ -434,7 +396,8 @@ class FixedStartPhoenixR(object):
         except (LinAlgError, FloatingPointError, ZeroDivisionError):
             model = tseries.mean()
 
-        self.score = self.score_func(model, tseries, self.num_params)
+        self.score = self.score_func(model, tseries, self.num_params, \
+                self.parameters)
         np.seterr(**old_state)
         return self
 
@@ -454,7 +417,7 @@ class WavePhoenixR(object):
         Will continue improving models while the error is decaying above
         this threshold.
 
-    err_metric : string in ('log', 'ssq', 'chisq')
+    residual_metric : string in ('lin', 'log', 'mean')
         Error metric to minimize on the residual. See the function
         residual for more details.
     
@@ -465,20 +428,13 @@ class WavePhoenixR(object):
     '''
 
     def __init__(self, period=7, wave_widths=[1, 2, 4, 8, 16, 32, 64, 128, 256], 
-            threshold=.05, err_metric='log', score_func='bic'):
-        
-        if score_func not in SCORES:
-            raise ValueError('Most choose residual from ' + SCORES)
+            threshold=.05, residual_metric='mean', score_func='bic'):
         
         self.period = period
         self.wave_widths = wave_widths
         self.threshold = threshold
-        self.err_metric = err_metric
-        
-        if score_func == 'bic':
-            self.score_func = bic
-        else:
-            self.score_func = msq
+        self.residual_metric = residual_metric
+        self.score_func = SCORES[score_func]
         
         self.parameters = None
         self.num_params = None
@@ -490,12 +446,12 @@ class WavePhoenixR(object):
     def fit(self, tseries):
         
         tseries = np.asanyarray(tseries)
-        
+
         #i'm too lazy to type self a lot
         wave_widths = self.wave_widths 
         period = self.period
         threshold = self.threshold
-        err_metric = self.err_metric
+        residual_metric = self.residual_metric
         score_func = self.score_func
 
         #Find peaks and add them all to a set 
@@ -510,12 +466,16 @@ class WavePhoenixR(object):
         for x in peaks:
             min_sp = min(min_sp, max(x[2] - x[1], 1))
 
+        #first peak is searched for by grid search 
         candidate_peak_volumes = []
-        candidate_peak_volumes.append(tseries[:min_sp].sum())
+        candidate_peak_volumes.append(1)
         
         for x in peaks:
             candidate_sp = max(x[2] - x[1], 1)
-            peak_vol = tseries[x[2]] - tseries[candidate_sp]
+            peak_vol = max(tseries[x[2]] - tseries[candidate_sp], 0)
+            
+            if peak_vol == 0:
+                continue
 
             if candidate_sp not in candidate_start_points:
                 candidate_start_points.append(candidate_sp)
@@ -530,10 +490,10 @@ class WavePhoenixR(object):
             sp = candidate_start_points[i]
             pv = candidate_peak_volumes[i]
             
-            params = _fit_one(tseries, period, err_metric, sp, pv, params)
+            params = _fit_one(tseries, period, residual_metric, sp, pv, params)
             model = phoenix_r_with_period(params, tseries.shape[0])
             num_params = 5 * (i + 1) + 2
-            curr_score = self.score_func(model, tseries, num_params)
+            curr_score = self.score_func(model, tseries, num_params, params)
 
             if (curr_score <= best_score):
                 best_params = params
@@ -542,7 +502,7 @@ class WavePhoenixR(object):
                 increased_score = (curr_score - best_score) / best_score
                 if increased_score > threshold:
                     break
-        
+
         self.parameters = best_params
         self.num_params = 5 * self.parameters['num_models'].value + 2
         self.score = best_score

@@ -40,7 +40,6 @@ def main(tseries_fpath, result_fpath, window_size='1d'):
     keys = [x for x in parameters]
     #shuffle(keys)
     for key in keys:
-        print(key)
         h_frame = store[key]
         d_frame = h_frame.resample(window_size, how='sum')
         
@@ -51,23 +50,22 @@ def main(tseries_fpath, result_fpath, window_size='1d'):
             pop_series = d_frame
          
         params = parameters[key]
-        model = models.FixedParamsPhoenixR(params)
+        model = models.WavePhoenixR(residual_metric='log')
+        #model = models.FixedParamsPhoenixR(params)
         model.fit(pop_series.values) 
         pm = model(pop_series.shape[0])
         
         assert pm.shape == pop_series.shape
         
-        print(key)
-        pm_series = pd.Series(pm, index=d_frame.index)
+        pm_series = pd.Series(pm, index=pop_series.index)
         
-        pm_series = pm_series[pop_series.values > 0]
-        #audi_series = audi_series[pop_series.values > 0]
-        pop_series = pop_series[pop_series.values > 0]
-        
+        #pm_series = pm_series[pop_series.values > 0]
+        #pop_series = pop_series[pop_series.values > 0]
+        #new_series = new_series[pop_series.values > 0]
+
         pop_series.plot(logy=True, use_index=True, marker='o', color='w', label='data')
-        #audi_series.plot(logy=True, use_index=True, label='audi')
         pm_series.plot(logy=True, use_index=True, label='model', color='k')
-        
+
         plt.legend()
         plt.show()
 
