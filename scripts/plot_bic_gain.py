@@ -15,6 +15,10 @@ import rpy2.robjects as robjects
 import rpy2.robjects.numpy2ri #Automagic conversion of numpy to R
 rpy2.robjects.numpy2ri.activate()
 
+def bic(x, y, k):
+    n = x.shape[0]
+    return n * np.log(((x - y) ** 2).mean()) + k * np.log(n)
+
 def main(result_fpath):
    
     parameters = OrderedDict()
@@ -43,14 +47,11 @@ def main(result_fpath):
         params = parameters[key]
         err = errors[key]
 
-        #Fixing our BIC estimate, due to a bug in the code
-        num_models_orig = len(params['start_points'])
-        num_models_fix = len(set(params['start_points']))
+        #rmse_phoenix = np.sqrt(err[0])
+        #rmse_kir = min(err[[2, 4, 6, 8]])
         
-        k = 2 + num_models_fix * 5
-        
-        bic_phoenix = np.sqrt(err[0])
-        bic_kir = np.sqrt(min(err[[2, 4, 6, 8]]))
+        bic_phoenix = err[1]
+        bic_kir = min(err[[3, 5, 7, 9]])
         
         bics_phx.append(bic_phoenix)
         bics_kir.append(bic_kir)
@@ -65,8 +66,9 @@ def main(result_fpath):
     res = ks(bics_phx, bics_kir)#, alternative='less')
     val = res.rx2('statistic')[0]
     p_val = res.rx2('p.value')[0]
-    
-    print(sum(wins) / bics_phx.shape[0], '&', np.median(diff))
+
+    from vod.stats.ci import half_confidence_interval_size as hci 
+    print(sum(wins) / bics_phx.shape[0], '&', np.mean(diff), hci(diff, .95))
     #print(val, p_val, np.median(diff), sum(wins), bics_phx.shape[0], sum(wins) / bics_phx.shape[0])
 if __name__ == '__main__':
     plac.call(main)

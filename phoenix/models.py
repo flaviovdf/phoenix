@@ -48,7 +48,7 @@ def period_fun(period, amp, phase, t):
     
     return 1 - .5 * amp * (np.sin(2 * np.pi * (t + phase) / period) + 1)
 
-def phoenix_r_with_period(parameters, num_ticks):
+def phoenix_r_with_period(parameters, num_ticks, return_audience=False):
     '''
     Calls the Phoenix-R model adding a period function
     
@@ -66,7 +66,7 @@ def phoenix_r_with_period(parameters, num_ticks):
     ode.phoenix_r : for the actual phoenix R equations
     '''
 
-    result = ode.phoenix_r(parameters, num_ticks)
+    result = ode.phoenix_r(parameters, num_ticks, return_audience)
         
     if isinstance(parameters, lmfit.Parameters):
         amp = parameters['amp'].value
@@ -77,11 +77,11 @@ def phoenix_r_with_period(parameters, num_ticks):
         phase = parameters['phase']
         period = parameters['period']
     
-    result *= period_fun(period, amp, phase, np.arange(num_ticks))
-
+    if not return_audience:
+        result *= period_fun(period, amp, phase, np.arange(num_ticks))
     return result
 
-def residual(params, tseries, residual_metric):
+def residual(params, tseries, residual_metric, fit_audience=False):
     '''
     Computes the residual of the model. Different strategies can me used
     for this computaion such as:
@@ -100,11 +100,15 @@ def residual(params, tseries, residual_metric):
     params : dict like
         Parameters to input to the model
 
-    tseries : array like 
-        Time series which the model tries to capture
+    tseries : array like (or matrix if fit_audience is True)
+        Time series which the model tries to capture. If we will
+        also fir the audience, a matrix should be passed.
     
     residual_metric : string in ('lin', 'log', 'mean')
         Error metric to use, defaults to mean
+
+    fit_audience : bool
+        Indicates if the audience should be fitted, not the popularity.
 
     Returns
     -------
@@ -117,20 +121,21 @@ def residual(params, tseries, residual_metric):
     if residual_metric not in RESIDUALS:
         raise ValueError('Most choose residual from ' + ' '.join(RESIDUALS))
 
-    est = phoenix_r_with_period(params, tseries.shape[0])
+    est = phoenix_r_with_period(params, tseries.shape[0], fit_audience)
+    data = tseries 
 
     if residual_metric == 'log':
-        msk = (est > 0) & (tseries > 0)
+        msk = (est > 0) & (data > 0)
         if not msk.any():
-            return (tseries - tseries.mean())
-        return np.log(tseries[msk]) - np.log(est[msk]) 
+            return (data - data.mean())
+        return np.log(data[msk]) - np.log(est[msk]) 
     else:
-        n = tseries.shape[0]
+        n = data.shape[0]
         if residual_metric == 'mean':
             div = np.sqrt(n)
         else:
             div = 1
-        return (tseries - est) / div
+        return (data - est) / div
 
 def _params_to_list_of_tuples(params, ignore=None):
     
@@ -146,7 +151,8 @@ def _params_to_list_of_tuples(params, ignore=None):
     
     return copy
 
-def _fit_one(tseries, period, residual_metric, curr_sp, curr_pv, curr_params):
+def _fit_one(tseries, period, residual_metric, curr_sp, curr_pv, fit_audience, 
+        curr_params):
     
     init_params = []
     #copy current parameters
@@ -160,12 +166,12 @@ def _fit_one(tseries, period, residual_metric, curr_sp, curr_pv, curr_params):
         init_params.append(\
                 ('amp', 0, True, 0, 1))
         init_params.append(\
-                ('phase', 0, 0, 0, period))
+                ('phase', 0, True, 0, period))
     
     #Add the new shock
     if curr_sp != 0:
         init_params.append(\
-                ('s0_%d' % curr_sp, curr_pv, True))
+                ('s0_%d' % curr_sp, curr_pv, True, 0))
 
     init_params.append(\
             ('i0_%d' % curr_sp, 1, False))
@@ -190,30 +196,42 @@ def _fit_one(tseries, period, residual_metric, curr_sp, curr_pv, curr_params):
     init_params.append(('start_points', start_points, False))
     init_params.append(('num_models', num_models, False))
     
-    #Grid search for s0_0
-    best_err = np.inf
-    best_params = None
-    for s0_0 in np.logspace(2, 6, 21):
-        params = lmfit.Parameters()
-        params.add_many(*init_params)
-        params.add('s0_0', value=s0_0, vary=True)
+    if curr_sp == 0:
+        #Grid search for s0_0
+        best_err = np.inf
+        best_params = None
+        for s0_0 in np.logspace(2, 6, 21):
+            params = lmfit.Parameters()
+            params.add_many(*init_params)
+            params.add('s0_0', value=s0_0, vary=True, min=0)
         
-        try:
-            lmfit.minimize(residual, params, \
-                    args=(tseries, residual_metric), ftol=.0001, xtol=.0001)
-            err = (residual(params, tseries, residual_metric) ** 2).sum()
-            if err < best_err:
-                best_err = err
-                best_params = params
-    
-        except (AssertionError, LinAlgError, FloatingPointError, \
-                ZeroDivisionError):
-            continue
-    
-    #ugly ugly hack. stick with last guess if none worked
-    if best_params is None:
-        best_params = params
+            try:
+                lmfit.minimize(residual, params, \
+                        args=(tseries, residual_metric, fit_audience), 
+                        ftol=.0001, xtol=.0001)
+                resid = residual(params, tseries, residual_metric, fit_audience)
+                err = (resid ** 2).sum()
+                if err < best_err:
+                    best_err = err
+                    best_params = params
+            except (AssertionError, LinAlgError, FloatingPointError, \
+                    ZeroDivisionError, TypeError):
+                continue
 
+        #ugly ugly hack. stick with last guess if none worked
+        if best_params is None:
+            best_params = params
+    else:
+        try:
+            best_params = lmfit.Parameters()
+            best_params.add_many(*init_params)
+            lmfit.minimize(residual, best_params, \
+                    args=(tseries, residual_metric, fit_audience), \
+                    ftol=.0001, xtol=.0001)
+        except (AssertionError, LinAlgError, FloatingPointError, \
+                ZeroDivisionError, TypeError):
+            best_params = curr_params
+    
     return best_params
 
 class FixedParamsPhoenixR(object):
@@ -225,12 +243,10 @@ class FixedParamsPhoenixR(object):
     parameters : dict like
         The parameters for the model
 
-    score_func : string in {'bic', 'msq'}
-        Select the score to store. BIC or SSQ. Our BIC score is based
-        on the assumptions that errors are normally distributed. This is
-        considered a safe choice.
+    score_func : string in {'bic', 'msq', 'mdl'}
+        Select the score to store. 
     '''
-    def __init__(self, parameters, score_func='bic'):
+    def __init__(self, parameters, score_func='mdl'):
         
         self.parameters = parameters
         self.score_func = SCORES[score_func]
@@ -255,77 +271,6 @@ class FixedParamsPhoenixR(object):
                 tseries.shape[0]), tseries, self.num_params, self.parameters)
         return self
 
-class InitParametersPhoenixR(object):
-    '''
-    PhoenixR with given start values
-
-    Parameters
-    ----------
-    parameters : dict like or lmfit.Parameters
-        Initial parameters for the phoenix R model
-
-    residual_metric : string in ('lin', 'log', 'mean')
-        Error metric to minimize on the residual. See the function
-        `residual` for more details.
-
-
-    score_func : string in {'bic', 'msq'}
-        Select the score to store. BIC or MSQ. Our BIC score is based
-        on the assumptions that errors are normally distributed. This is
-        considered a safe choice.
-    '''
-    def __init__(self, parameters, residual_metric='mean', score_func='bic'):
-        self.parameters = self._tolmfit(parameters)
-        self.residual_metric = residual_metric
-        self.score_func = SCORES[score_func]
-       
-        self.num_params = None
-        self.score = None
-
-    def _tolmfit(self, parameters):
-        if isinstance(parameters, lmfit.Parameters):
-            return parameters
-
-        #Make sure we have the vary and limits correct
-        rv = lmfit.Parameters()
-        for key in parameters:
-            if 'gamma_' in key:
-                rv.add(key, value=parameters[key], min=0, max=1)
-            elif 'beta_' in key:
-                rv.add(key, value=parameters[key], min=0, max=1)
-            elif 'r_' in key:
-                rv.add(key, value=parameters[key], min=0)
-            elif 'amp' == key:
-                rv.add(key, value=parameters[key], min=0)
-            elif 'phase' == key:
-                rv.add(key, value=parameters[key], min=0, \
-                        max=parameters['period'])
-            else:
-                #The rest we don't vary
-                rv.add(key, value=parameters[key], vary=False)
-
-        return rv
-
-    def __call__(self, num_ticks):
-        return phoenix_r_with_period(self.parameters, num_ticks)
-
-    def fit(self, tseries):
-        
-        tseries = np.asanyarray(tseries)
-        
-        old_state = np.seterr(all='raise')
-        lmfit.minimize(residual, self.parameters, \
-                    args=(tseries, self.residual_metric))
-        model = phoenix_r_with_period(self.parameters, tseries.shape[0])
-
-        num_models = self.parameters['num_models']
-        self.num_params = 5 * num_models + 2
-        self.score = self.score_func(model, tseries, self.num_params, \
-                self.parameters)
-
-        np.seterr(**old_state)
-        return self
-
 class FixedStartPhoenixR(object):
     '''
     PhoenixR model with fixed start points. The model will fit one start
@@ -348,14 +293,12 @@ class FixedStartPhoenixR(object):
         Error metric to minimize on the residual. See the function
         residual for more details.
 
-    score_func : string in ('bic', 'msq')
-        Select the score to store. BIC or SSQ. Our BIC score is based
-        on the assumptions that errors are normally distributed. This is
-        considered a safe choice.
+    score_func : string in ('bic', 'msq', 'mdl')
+        Select the score to store. 
     '''
 
     def __init__(self, start_points, peak_volumes, period=7, \
-            residual_metric='mean', score_func='bic'):
+            residual_metric='mean', score_func='mdl'):
         
         self.start_points = np.asanyarray(start_points, dtype='i')
         self.peak_volumes = np.asanyarray(peak_volumes, dtype='f')
@@ -385,7 +328,8 @@ class FixedStartPhoenixR(object):
             pv = self.peak_volumes[i]
             
             params = \
-                _fit_one(tseries, self.period, self.residual_metric, sp, pv, params)
+                _fit_one(tseries, self.period, self.residual_metric, sp, pv, \
+                False, params)
         
         num_models = len(start_points)
         self.num_params = 5 * num_models + 2
@@ -421,44 +365,73 @@ class WavePhoenixR(object):
         Error metric to minimize on the residual. See the function
         residual for more details.
     
-    score_func : string in {'bic', 'msq'}
-        Select the score to store. BIC or SSQ. Our BIC score is based
-        on the assumptions that errors are normally distributed. This is
-        considered a safe choice. 
+    score_func : string in {'bic', 'msq', 'mdl'}
+        Select the score to store.
+
+    fit_audience : bool
+        Indicates if the audience should be fit, not the popularity.
     '''
 
     def __init__(self, period=7, wave_widths=[1, 2, 4, 8, 16, 32, 64, 128, 256], 
-            threshold=.05, residual_metric='mean', score_func='bic'):
+            threshold=.05, residual_metric='mean', score_func='mdl', 
+            fit_audience=False):
         
         self.period = period
         self.wave_widths = wave_widths
         self.threshold = threshold
         self.residual_metric = residual_metric
         self.score_func = SCORES[score_func]
+        self.fit_audience = fit_audience
         
         self.parameters = None
         self.num_params = None
         self.score = None
 
-    def __call__(self, num_ticks):
-        return phoenix_r_with_period(self.parameters, num_ticks)
+    def __call__(self, num_ticks, return_audience=False):
+        return phoenix_r_with_period(self.parameters, num_ticks, return_audience)
 
-    def fit(self, tseries):
+    def _wave_fit(self, tseries, candidate_start_points, candidate_peak_volumes):
+        '''
+        This method has the fitting startegy to minimize the cost.
+        ''' 
         
-        tseries = np.asanyarray(tseries)
-
-        #i'm too lazy to type self a lot
-        wave_widths = self.wave_widths 
         period = self.period
         threshold = self.threshold
         residual_metric = self.residual_metric
         score_func = self.score_func
+        fit_audience = self.fit_audience
 
-        #Find peaks and add them all to a set 
-        peaks = find_peaks(tseries, wave_widths)
+        curr_score = np.finfo('d').max
+        best_score = np.finfo('d').max
+        best_params = None
+
+        params = None
+        for i in xrange(len(candidate_start_points)):
+            sp = candidate_start_points[i]
+            pv = candidate_peak_volumes[i]
+            
+            params = _fit_one(tseries, period, residual_metric, sp, pv, \
+                    fit_audience, params)
+            model = phoenix_r_with_period(params, tseries.shape[0])
+            num_params = 5 * (i + 1) + 2
+            curr_score = self.score_func(model, tseries, num_params, params)
+
+            if (curr_score <= best_score):
+                best_params = params
+                best_score = curr_score
+            else:
+                increased_score = (curr_score - best_score) / best_score
+                if increased_score > threshold:
+                    break
+
+        return best_score, best_params
+
+    def fit(self, tseries):
+        
+        tseries = np.asanyarray(tseries)
+        peaks = find_peaks(tseries, self.wave_widths)
 
         #Consider unique start_points only.
-        #TODO: maybe we can use multiple infections starting at the same point?
         candidate_start_points = []
         candidate_start_points.append(0)
         
@@ -466,7 +439,7 @@ class WavePhoenixR(object):
         for x in peaks:
             min_sp = min(min_sp, max(x[2] - x[1], 1))
 
-        #first peak is searched for by grid search 
+        #first peak is searched for by grid search
         candidate_peak_volumes = []
         candidate_peak_volumes.append(1)
         
@@ -481,27 +454,14 @@ class WavePhoenixR(object):
                 candidate_start_points.append(candidate_sp)
                 candidate_peak_volumes.append(peak_vol)
         
-        curr_score = np.finfo('d').max
         best_score = np.finfo('d').max
         best_params = None
-        
-        params = None
-        for i in xrange(len(candidate_start_points)):
-            sp = candidate_start_points[i]
-            pv = candidate_peak_volumes[i]
-            
-            params = _fit_one(tseries, period, residual_metric, sp, pv, params)
-            model = phoenix_r_with_period(params, tseries.shape[0])
-            num_params = 5 * (i + 1) + 2
-            curr_score = self.score_func(model, tseries, num_params, params)
-
-            if (curr_score <= best_score):
+        for _ in xrange(20):
+            score, params = self._wave_fit(tseries, candidate_start_points,\
+                    candidate_peak_volumes)
+            if score < best_score:
+                best_score = score
                 best_params = params
-                best_score = curr_score
-            else:
-                increased_score = (curr_score - best_score) / best_score
-                if increased_score > threshold:
-                    break
 
         self.parameters = best_params
         self.num_params = 5 * self.parameters['num_models'].value + 2

@@ -50,8 +50,7 @@ def main(tseries_fpath, result_fpath, window_size='1d'):
             pop_series = d_frame
          
         params = parameters[key]
-        model = models.WavePhoenixR(residual_metric='log')
-        #model = models.FixedParamsPhoenixR(params)
+        model = models.FixedParamsPhoenixR(params)
         model.fit(pop_series.values) 
         pm = model(pop_series.shape[0])
         

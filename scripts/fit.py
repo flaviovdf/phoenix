@@ -30,7 +30,7 @@ def real_fit(args):
     #    continue
 
     try:
-        model = models.WavePhoenixR()
+        model = models.WavePhoenixR(score_func='mdl')
         model.fit(pop_series)
         
         phoenix_model = model(pop_series.shape[0])

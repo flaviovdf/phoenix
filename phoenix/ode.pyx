@@ -14,9 +14,13 @@ import lmfit
 import numpy as np
 cimport numpy as np
 
+cdef extern from 'math.h':
+    double exp(double x) nogil
+
 cdef double[:] _shock(double beta, double gamma, double alpha, double r, \
-        long s_0, long i_0, double d_t, double[:] store_at, 
-        Py_ssize_t start, Py_ssize_t end, int accumulate) nogil:
+        long s_0, long i_0, double d_t, double[:] store_at, \
+        Py_ssize_t start, Py_ssize_t end, int accumulate, \
+        int store_audience) nogil:
     '''
     This method implements the euler method for simulating the shock model.
 
@@ -54,6 +58,9 @@ cdef double[:] _shock(double beta, double gamma, double alpha, double r, \
 
     accumulate : 1 or 0
         set to 1 to add to the store_at array. 0 means replace.
+
+    store_audience : 1 or 0
+        indicates if we should store audience and not popularity
     '''
     
     cdef double pop_size = s_0 + i_0
@@ -103,7 +110,13 @@ cdef double[:] _shock(double beta, double gamma, double alpha, double r, \
         if recovered < 0:
             recovered = 0
         
-        rv_i = infected * r 
+        if store_audience == 1:
+            if gamma > 0:
+                rv_i = (1 - exp(-r/gamma)) * d_r
+            else:
+                rv_i = d_r
+        else:
+            rv_i = infected * r
         
         if accumulate == 1:
             store_at[t + start] += rv_i
@@ -112,13 +125,12 @@ cdef double[:] _shock(double beta, double gamma, double alpha, double r, \
 
     return store_at
 
-cdef double[:] _phoenix_r(double[:, ::1] param_mat, double[:] store_at) nogil:
+cdef double[:] _phoenix_r(double[:, ::1] param_mat, double[:] store_at, \
+        int store_audience) nogil:
     '''
     This method implemets the phoenix-r equations. Parameters are passed
     as a matrix, being each row shock parameters for individual shocks.
 
-    This method will use open mp to run in parallel.
-    
     Parameters
     ----------
     param_mat : num_shocks by 9 matrix.
@@ -135,20 +147,22 @@ cdef double[:] _phoenix_r(double[:, ::1] param_mat, double[:] store_at) nogil:
 
     store_at : array
         Where to store results
+    
+    store_audience : 1 or 0
+        indicates if we should store audience and not popularity
     '''
 
     cdef Py_ssize_t num_models = param_mat.shape[0]
     cdef Py_ssize_t i
-    for i in parallel.prange(num_models, schedule='static', nogil=True, \
-            num_threads=4):
+    for i in range(num_models):
         _shock(param_mat[i, 0], param_mat[i, 1], param_mat[i, 2],
                 param_mat[i, 3], <long> param_mat[i, 4], <long> param_mat[i, 5],
                 param_mat[i, 6], store_at, <Py_ssize_t> param_mat[i, 7],
-                <Py_ssize_t> param_mat[i, 8], 1)
+                <Py_ssize_t> param_mat[i, 8], 1, store_audience)
     return store_at
 
 def shock(double beta, double gamma, double r, long s_0, long i_0, \
-        Py_ssize_t num_ticks):
+        Py_ssize_t num_ticks, store_audience=False):
     '''
     This method implements a single shock simulation.
     This is a wrapper method for the faster cython code.
@@ -172,12 +186,17 @@ def shock(double beta, double gamma, double r, long s_0, long i_0, \
 
     num_ticks : int
         number of ticks to simulate
+
+    store_audience : bool (default=False)
+        indicates if the model should return the audience
     '''
  
+    store_audiece = int(store_audience)
     rv = np.zeros(num_ticks, dtype='d')
     d_t = 1.0 #we assume discrete time.
     alpha = 0 #no re-infections
-    _shock(beta, gamma, alpha, r, s_0, i_0, d_t, rv, 0, num_ticks, 0)
+    _shock(beta, gamma, alpha, r, s_0, i_0, d_t, rv, 0, num_ticks, 0, \
+            store_audiece)
     return rv
 
 def _unpack_params(parameters):
@@ -193,7 +212,7 @@ def _unpack_params(parameters):
 
     return params_dict
 
-def phoenix_r(parameters, num_ticks):
+def phoenix_r(parameters, num_ticks, store_audience=False):
     '''
     This method implements a single shock simulation.
     This is a wrapper method for the faster cython code.
@@ -205,6 +224,9 @@ def phoenix_r(parameters, num_ticks):
     
     num_ticks : int
         number of ticks to simulate
+    
+    store_audience : bool (default=False)
+        indicates if the model should return the audience
     '''
     
     cdef dict params_dict = _unpack_params(parameters)
@@ -228,5 +250,5 @@ def phoenix_r(parameters, num_ticks):
         param_mat[i, 8] = num_ticks
     
     rv = np.zeros(num_ticks, dtype='d')
-    _phoenix_r(param_mat, rv)
+    _phoenix_r(param_mat, rv, int(store_audience))
     return rv

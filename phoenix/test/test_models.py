@@ -100,31 +100,6 @@ def test_fixed_fit():
     assert_array_equal([0, 50], model.parameters['start_points'].value)
     assert_equal(exp_tseries.shape, results.shape)
 
-def test_init_params_model():
-    
-    exp_tseries = np.zeros(150, dtype='d') 
-    result_1 = ode.shock(0.01, 0, 0.8, 1000, 2, 200)
-    result_2 = ode.shock(0.02, 0, 0.8, 200, 3, 150)
-
-    exp_tseries = result_1
-    exp_tseries[50:] += result_2
-   
-    pv1, pv2 = sorted(exp_tseries[::-1])[:2]
-    model = models.FixedStartPhoenixR([0, 50], [pv1, pv2], period=1)
-    model.fit(exp_tseries)
-    
-    model2 = models.InitParametersPhoenixR(model.parameters)
-    model2.fit(exp_tseries)
-
-    results1 = model(200)
-    results2 = model(200)
-    
-    assert_equal(exp_tseries.shape, results1.shape)
-    assert_equal(exp_tseries.shape, results2.shape)
-    
-    for key in model.parameters:
-        assert_equal(model.parameters[key].value, model2.parameters[key].value)
-
 def test_wavelet_fit():
     '''Tests the wavelet fitting strategy'''
 

@@ -60,19 +60,20 @@ def four_plots(data, data_name, fname, logx=True):
     
     fit = powerlaw.Fit(data, xmin=[1, 100])
     
-    #cdf_x, cdf_y = ecdf(data)
-    #ccdf_y = 1 - cdf_y
+    cdf_x, cdf_y = ecdf(data)
+    ccdf_y = 1 - cdf_y
     #odds_ratio = cdf_y[ccdf_y != 0] / ccdf_y[ccdf_y != 0]
     
     plt.xlabel(data_name, labelpad=0)
-    plt.ylabel(r'$p(X = x)$', labelpad=0)
-    ax = plt.gca()
+    plt.ylabel(r'$P(X > x)$', labelpad=0)
+    plt.plot(cdf_x, ccdf_y)
+    #ax = plt.gca()
     
-    bin_centers, hist = get_hist(data)
-    plt.loglog(bin_centers, hist, 'wo', ms=3, label='data')
-    fit.power_law.plot_pdf(ax=plt.gca(), color='g', linestyle='-', label='plaw/lognrm')
-    fit.lognormal.plot_pdf(ax=plt.gca(), color='b', linestyle='--')
-    plt.legend(loc='lower left', frameon=False)
+    #bin_centers, hist = get_hist(data)
+    #plt.loglog(bin_centers, hist, 'wo', ms=3, label='data')
+    #fit.power_law.plot_pdf(ax=plt.gca(), color='g', linestyle='-', label='plaw/lognrm')
+    #fit.lognormal.plot_pdf(ax=plt.gca(), color='b', linestyle='--')
+    #plt.legend(loc='lower left', frameon=False)
 
     plt.tight_layout(pad=0)
     plt.savefig(fname)
@@ -134,28 +135,27 @@ def main(input_fpath, table_name, out_folder):
         audience_counts_arr[obj] = audience_counts[obj]
         duplicate_counts_arr[obj] = duplicate_counts[obj]
 
-    msk = obj_counts_arr > 500
+    msk = obj_counts_arr > 20
     obj_counts_arr = obj_counts_arr[msk]
     audience_counts_arr = audience_counts_arr[msk]
     duplicate_counts_arr = duplicate_counts_arr[msk]
 
     dups_over_audi = duplicate_counts_arr / audience_counts_arr
     dups_over_pop = duplicate_counts_arr / obj_counts_arr
-    
-    
+     
     print('Corr')
     print(ss.pearsonr(np.log10(audience_counts_arr[duplicate_counts_arr > 0]), \
         np.log10(duplicate_counts_arr[duplicate_counts_arr > 0])))
     print(ss.kendalltau(audience_counts_arr, duplicate_counts_arr))
     
-    #fname = os.path.join(out_folder, '%s-rev_div_audi-xmin.pdf' % table_name)
-    #four_plots(duplicate_counts_arr / audience_counts_arr, r'Revisits/Audience - $x$', fname, True)
+    fname = os.path.join(out_folder, '%s-rev_div_audi-xmin.pdf' % table_name)
+    four_plots(duplicate_counts_arr / audience_counts_arr, r'Revisits/Audience - $x$', fname, True)
     
-    #print()
-    #print('Fraction Dups > Audi', (dups_over_audi > 1).sum() / dups_over_audi.shape[0])
-    #print('Median Dups / Audi', np.median(dups_over_audi))
-    #print('Median Dups / Pop', np.median(dups_over_pop))
-    #print()
+    print()
+    print('Fraction Dups > Audi', (dups_over_audi > 1).sum() / dups_over_audi.shape[0])
+    print('Median Dups / Audi', np.median(dups_over_audi))
+    print('Median Dups / Pop', np.median(dups_over_pop))
+    print()
 
     h5_file.close()
 
