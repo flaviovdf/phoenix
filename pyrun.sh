@@ -7,3 +7,4 @@ function findself() {
 SELFDIR=`findself`
 
 PYTHONPATH=$SELFDIR/ python $*
+

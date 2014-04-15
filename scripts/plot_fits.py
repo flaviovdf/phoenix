@@ -6,6 +6,7 @@ from collections import OrderedDict
 
 from matplotlib import pyplot as plt
 
+from phoenix import ode
 from phoenix import models
 
 import json
@@ -50,20 +51,19 @@ def main(tseries_fpath, result_fpath, window_size='1d'):
             pop_series = d_frame
          
         params = parameters[key]
-        model = models.FixedParamsPhoenixR(params)
-        model.fit(pop_series.values) 
-        pm = model(pop_series.shape[0])
+
+        pm = ode.phoenix_r(params, len(pop_series)) 
         
         assert pm.shape == pop_series.shape
         
         pm_series = pd.Series(pm, index=pop_series.index)
-        
         #pm_series = pm_series[pop_series.values > 0]
         #pop_series = pop_series[pop_series.values > 0]
         #new_series = new_series[pop_series.values > 0]
+ 
+        pop_series.plot(use_index=True, marker='o', color='w', label='data')
+        pm_series.plot(use_index=True, label='model', color='k')
 
-        pop_series.plot(logy=True, use_index=True, marker='o', color='w', label='data')
-        pm_series.plot(logy=True, use_index=True, label='model', color='k')
 
         plt.legend()
         plt.show()

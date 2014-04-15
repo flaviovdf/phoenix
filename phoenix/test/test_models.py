@@ -41,7 +41,7 @@ def tests_the_phoenix_r_method():
     parameters['amp'] = 0
     parameters['phase'] = 0
 
-    results = models.phoenix_r_with_period(parameters, 200)
+    results = models.phoenix_r_with_period(parameters, 200) - 1e-6
     
     assert_array_equal(exp_tseries, results)
 

@@ -7,8 +7,6 @@ Shock and Phoenix-R model
 '''
 from __future__ import division, print_function
 
-from cython cimport parallel
-
 import lmfit
 
 import numpy as np
@@ -20,7 +18,7 @@ cdef extern from 'math.h':
 cdef double[:] _shock(double beta, double gamma, double alpha, double r, \
         long s_0, long i_0, double d_t, double[:] store_at, \
         Py_ssize_t start, Py_ssize_t end, int accumulate, \
-        int store_audience) nogil:
+        int store_audience):
     '''
     This method implements the euler method for simulating the shock model.
 
@@ -126,7 +124,7 @@ cdef double[:] _shock(double beta, double gamma, double alpha, double r, \
     return store_at
 
 cdef double[:] _phoenix_r(double[:, ::1] param_mat, double[:] store_at, \
-        int store_audience) nogil:
+        int store_audience):
     '''
     This method implemets the phoenix-r equations. Parameters are passed
     as a matrix, being each row shock parameters for individual shocks.

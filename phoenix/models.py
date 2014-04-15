@@ -66,7 +66,8 @@ def phoenix_r_with_period(parameters, num_ticks, return_audience=False):
     ode.phoenix_r : for the actual phoenix R equations
     '''
 
-    result = ode.phoenix_r(parameters, num_ticks, return_audience)
+    #the 1e-3 avoids underflows.
+    result = ode.phoenix_r(parameters, num_ticks, return_audience) + 1e-6
         
     if isinstance(parameters, lmfit.Parameters):
         amp = parameters['amp'].value
@@ -124,11 +125,16 @@ def residual(params, tseries, residual_metric, fit_audience=False):
     est = phoenix_r_with_period(params, tseries.shape[0], fit_audience)
     data = tseries 
 
+    #zeros are missing values
+    msk = (est > 0) & (data > 0)
+    if not msk.any():
+        return (data - data.mean())
+    
+    data = data[msk]
+    est = est[msk]
+
     if residual_metric == 'log':
-        msk = (est > 0) & (data > 0)
-        if not msk.any():
-            return (data - data.mean())
-        return np.log(data[msk]) - np.log(est[msk]) 
+        return np.log(data) - np.log(est)
     else:
         n = data.shape[0]
         if residual_metric == 'mean':
@@ -164,9 +170,9 @@ def _fit_one(tseries, period, residual_metric, curr_sp, curr_pv, fit_audience,
         init_params.append(\
                 ('period', period, False))
         init_params.append(\
-                ('amp', 0, True, 0, 1))
+                ('amp', 0.01, True, 0, 1))
         init_params.append(\
-                ('phase', 0, True, 0, period))
+                ('phase', 0.01, True, 0, period))
     
     #Add the new shock
     if curr_sp != 0:
@@ -456,7 +462,7 @@ class WavePhoenixR(object):
         
         best_score = np.finfo('d').max
         best_params = None
-        for _ in xrange(20):
+        for _ in xrange(5):
             score, params = self._wave_fit(tseries, candidate_start_points,\
                     candidate_peak_volumes)
             if score < best_score:

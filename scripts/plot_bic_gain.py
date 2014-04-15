@@ -47,11 +47,11 @@ def main(result_fpath):
         params = parameters[key]
         err = errors[key]
 
-        #rmse_phoenix = np.sqrt(err[0])
-        #rmse_kir = min(err[[2, 4, 6, 8]])
+        bic_phoenix = err[0]
+        bic_kir = err[[2, 4, 6, 8]].min()
         
-        bic_phoenix = err[1]
-        bic_kir = min(err[[3, 5, 7, 9]])
+        #bic_phoenix = err[1]
+        #bic_kir = min(err[[3, 5, 7, 9]])
         
         bics_phx.append(bic_phoenix)
         bics_kir.append(bic_kir)
@@ -62,13 +62,14 @@ def main(result_fpath):
     bics_phx = np.asarray(bics_phx)
     bics_kir = np.asarray(bics_kir)
 
-    ks = robjects.r['ks.test']
-    res = ks(bics_phx, bics_kir)#, alternative='less')
-    val = res.rx2('statistic')[0]
-    p_val = res.rx2('p.value')[0]
+    #ks = robjects.r['ks.test']
+    #res = ks(bics_phx, bics_kir)#, alternative='less')
+    #val = res.rx2('statistic')[0]
+    #p_val = res.rx2('p.value')[0]
 
     from vod.stats.ci import half_confidence_interval_size as hci 
-    print(sum(wins) / bics_phx.shape[0], '&', np.mean(diff), hci(diff, .95))
+    print(sum(wins) / bics_phx.shape[0], '&', np.mean(bics_phx), hci(bics_phx, .95), np.mean(bics_kir), hci(bics_kir, .95), 
+            (np.mean(bics_kir) - np.mean(bics_phx)) / np.mean(bics_phx))
     #print(val, p_val, np.median(diff), sum(wins), bics_phx.shape[0], sum(wins) / bics_phx.shape[0])
 if __name__ == '__main__':
     plac.call(main)
