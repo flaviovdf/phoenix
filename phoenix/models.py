@@ -66,7 +66,7 @@ def phoenix_r_with_period(parameters, num_ticks, return_audience=False):
     ode.phoenix_r : for the actual phoenix R equations
     '''
 
-    #the 1e-3 avoids underflows.
+    #the 1e-6 avoids underflows.
     result = ode.phoenix_r(parameters, num_ticks, return_audience) + 1e-6
         
     if isinstance(parameters, lmfit.Parameters):
@@ -462,7 +462,7 @@ class WavePhoenixR(object):
         
         best_score = np.finfo('d').max
         best_params = None
-        for _ in xrange(5):
+        for _ in xrange(20):
             score, params = self._wave_fit(tseries, candidate_start_points,\
                     candidate_peak_volumes)
             if score < best_score:
