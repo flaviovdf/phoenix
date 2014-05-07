@@ -158,7 +158,7 @@ def _params_to_list_of_tuples(params, ignore=None):
     return copy
 
 def _fit_one(tseries, period, residual_metric, curr_sp, curr_pv, fit_audience, 
-        curr_params):
+        curr_params, first_sp):
     
     init_params = []
     #copy current parameters
@@ -202,19 +202,19 @@ def _fit_one(tseries, period, residual_metric, curr_sp, curr_pv, fit_audience,
     init_params.append(('start_points', start_points, False))
     init_params.append(('num_models', num_models, False))
     
-    if curr_sp == 0:
+    if curr_sp == first_sp:
         #Grid search for s0_0
         best_err = np.inf
         best_params = None
         for s0_0 in np.logspace(2, 6, 21):
             params = lmfit.Parameters()
             params.add_many(*init_params)
-            params.add('s0_0', value=s0_0, vary=True, min=0)
+            params.add('s0_%d' % first_sp, value=s0_0, vary=True, min=0)
         
             try:
                 lmfit.minimize(residual, params, \
                         args=(tseries, residual_metric, fit_audience), 
-                        ftol=.0001, xtol=.0001)
+                        ftol=.0000001, xtol=.0000001)
                 resid = residual(params, tseries, residual_metric, fit_audience)
                 err = (resid ** 2).sum()
                 if err < best_err:
@@ -335,7 +335,7 @@ class FixedStartPhoenixR(object):
             
             params = \
                 _fit_one(tseries, self.period, self.residual_metric, sp, pv, \
-                False, params)
+                False, params, self.start_points[0])
         
         num_models = len(start_points)
         self.num_params = 5 * num_models + 2
@@ -417,7 +417,7 @@ class WavePhoenixR(object):
             pv = candidate_peak_volumes[i]
             
             params = _fit_one(tseries, period, residual_metric, sp, pv, \
-                    fit_audience, params)
+                    fit_audience, params, candidate_start_points[0])
             model = phoenix_r_with_period(params, tseries.shape[0])
             num_params = 5 * (i + 1) + 2
             curr_score = self.score_func(model, tseries, num_params, params)
@@ -437,20 +437,17 @@ class WavePhoenixR(object):
         tseries = np.asanyarray(tseries)
         peaks = find_peaks(tseries, self.wave_widths)
 
-        #Consider unique start_points only.
+        #First start_point is first non zero data tick
+        first_nonz = np.where(tseries > 0)[0][0]
         candidate_start_points = []
-        candidate_start_points.append(0)
+        candidate_start_points.append(first_nonz)
         
-        min_sp = 1
-        for x in peaks:
-            min_sp = min(min_sp, max(x[2] - x[1], 1))
-
         #first peak is searched for by grid search
         candidate_peak_volumes = []
         candidate_peak_volumes.append(1)
         
         for x in peaks:
-            candidate_sp = max(x[2] - x[1], 1)
+            candidate_sp = max(x[2] - x[1], first_nonz + 1)
             peak_vol = max(tseries[x[2]] - tseries[candidate_sp], 0)
             
             if peak_vol == 0:
@@ -462,7 +459,7 @@ class WavePhoenixR(object):
         
         best_score = np.finfo('d').max
         best_params = None
-        for _ in xrange(20):
+        for _ in xrange(5):
             score, params = self._wave_fit(tseries, candidate_start_points,\
                     candidate_peak_volumes)
             if score < best_score:
