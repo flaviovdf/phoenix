@@ -353,7 +353,8 @@ class FixedStartPhoenixR(object):
 
 class WavePhoenixR(object):
     '''
-    PhoenixR model with fixed start points
+    PhoenixR model with fixed wavelet based shock starts. Paper results uses this
+    class.
     
     Parameters
     ----------
