@@ -63,9 +63,7 @@ def get_extensions():
             extension = Extension(module, ext_files,
                     include_dirs=[numpy.get_include()],
                     libraries=['blas'],
-                    extra_compile_args=['-fopenmp', '-msse', '-msse2', 
-                        '-mfpmath=sse'],
-                    extra_link_args=['-fopenmp'])
+                    extra_compile_args=['-msse', '-msse2', '-mfpmath=sse'])
 
             extensions.append(extension)
 
